@@ -8,11 +8,6 @@
 # ftts - A simple text-to-speech wrapper for Festival.
 #
 # Project: https://github.com/galaxy-cli/ftts
-# Requirements: festival, xsel
-#
-# Description:
-#   Reads text from the clipboard or a file and pipes it to the 
-#   Festival Speech Synthesis System
 
 # --- DEPENDENCY CHECK ---
 missing=()
