@@ -8,7 +8,7 @@
 # ftts - A simple text-to-speech wrapper for Festival.
 #
 # Project: https://github.com/galaxy-cli/ftts
-# Requirements: festival, xsel (for clipboard)
+# Requirements: festival, xsel
 #
 # Description:
 #   Reads text from the clipboard or a file and pipes it to the 
@@ -36,7 +36,7 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 # --- USAGE ---
-print_usage() {
+usage() {
     cat <<EOF
 USAGE
   ftts [OPTIONS]
@@ -48,7 +48,7 @@ OPTIONS
   -h, --help          Show this help message
   -c, --clipboard     Use clipboard (xsel)
   -f, --file FILE     Use specified text file
-  -s, --speak "TEXT"  Speak the provided string (must be in quotes)
+  -s, --speak TEXT    Speak the provided string (must be in quotes)
 EOF
 }
 
@@ -83,7 +83,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -h|--help)
-            print_usage
+            usage
             exit 0
             ;;
         *)
@@ -127,16 +127,13 @@ case "$input_source" in
         ;;
     *)
         echo "ftts: error: No valid input source specified" >&2
-        print_usage
+        usage
         exit 1
         ;;
 esac
 
 # --- EXECUTION ---
-# Escape double quotes
 escaped_text=$(printf '%s' "$text" | sed 's/"/\\"/g')
-
-# Execute with a hardcoded speed stretch (0.7 = faster)
 (
   echo "(Parameter.set 'Duration_Stretch 0.7)"
   echo "(SayText \"$escaped_text\")"

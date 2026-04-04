@@ -3,12 +3,12 @@ A minimalist CLI wrapper that piped text to the Festival Text-to-Speech engine f
 
 ### Prerequisites
     Festival: The core TTS engine
-    xsel: Required for clipboard support (`-c` flag)
+    xsel: Required for clipboard support (-c flag)
 
 ### Installation
 ```
 chmod +x ftts
-mv ftts ~/.local/bin/  # Or anywhere in your $PATH
+mv ftts ~/.local/bin/          # Or anywhere in your $PATH
 ```
 
 ### Usage
