@@ -33,17 +33,22 @@ fi
 # --- USAGE ---
 usage() {
     cat <<EOF
-USAGE
-  ftts [OPTION]
-
 DESCRIPTION
   Converts text to speech using the Festival engine
 
+USAGE
+  ftts [OPTION] [FILE | "TEXT"]
+
 OPTION
-  -h, --help          Show this help message
+  --help              Show this help message
   -c, --clipboard     Use clipboard (xsel)
-  -f, --file FILE     Use specified text file
-  -s, --speak TEXT    Speak the provided string (must be in quotes)
+  -f, --file          Use specified text file
+  -s, --speak         Speak the provided string (must be in quotes)
+
+EXAMPLES
+  ftts --clipboard              
+  ftts --file file.txt
+  ftts --speak "hello world"
 EOF
 }
 
@@ -77,7 +82,7 @@ while [[ $# -gt 0 ]]; do
             text="$2"
             shift 2
             ;;
-        -h|--help)
+        --help)
             usage
             exit 0
             ;;

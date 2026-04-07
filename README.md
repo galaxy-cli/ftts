@@ -21,7 +21,7 @@ ftts -c                        # Speak current clipboard content
 ### Options
 | Option | Argument | Description |
 | :--- | :---: | :--- |
-| `-h, --help` | None | Show this help message |
+| `--help` | None | Show this help message |
 | `-c, --clipboard` | None | Speak text from the clipboard |
 | `-f, --file` | `FILE` | Speak content from a plaintext file |
 | `-s, --speak` | `TEXT` | Speak a quoted string directly |
