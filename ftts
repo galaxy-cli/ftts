@@ -46,9 +46,9 @@ OPTION
   -s, --speak         Speak the provided string (must be in quotes)
 
 EXAMPLES
-  ftts --clipboard              
-  ftts --file file.txt
-  ftts --speak "hello world"
+  ftts --clipboard              TTS reads clipboard          
+  ftts --file file.txt          TTS reads file
+  ftts --speak "hello world"    TTS read input
 EOF
 }
 
