@@ -9,7 +9,7 @@
 #
 # Project: https://github.com/galaxy-cli/ftts
 
-# --- DEPENDENCY CHECK ---
+# --- DEPENDENCY ftts ---
 missing=()
 for cmd in festival xsel; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -34,12 +34,12 @@ fi
 usage() {
     cat <<EOF
 USAGE
-  ftts [OPTIONS]
+  ftts [OPTION]
 
 DESCRIPTION
   Converts text to speech using the Festival engine
 
-OPTIONS
+OPTION
   -h, --help          Show this help message
   -c, --clipboard     Use clipboard (xsel)
   -f, --file FILE     Use specified text file
