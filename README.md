@@ -1,4 +1,4 @@
-# check
+# ftts
 A minimalist CLI wrapper that piped text to the Festival Text-to-Speech engine from files, strings, or your clipboard.
 
 ### Prerequisites
@@ -7,15 +7,15 @@ A minimalist CLI wrapper that piped text to the Festival Text-to-Speech engine f
 
 ### Installation
 ```
-chmod +x check
-mv check ~/.local/bin/          # Or anywhere in your $PATH
+chmod +x ftts
+mv ftts ~/.local/bin/          # Or anywhere in your $PATH
 ```
 
 ### Usage
 ```
-check -s "Hello world"          # Speak a string directly
-check -f notes.txt              # Speak content of a file
-check -c                        # Speak current clipboard content
+ftts -s "Hello world"          # Speak a string directly
+ftts -f notes.txt              # Speak content of a file
+ftts -c                        # Speak current clipboard content
 ```
 
 ### Options
