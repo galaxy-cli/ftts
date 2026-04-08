@@ -60,7 +60,7 @@ file_path=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -c|--clipboard)
-            [[ -n "$input_source" ]] && { echo "ftts: [!] Multiple input sources specified" >&2; exit 1; }
+            [[ -n "$input_source" ]] && { echo "ftts: Multiple input sources specified" >&2; exit 1; }
             input_source="clipboard"
             shift
             ;;
@@ -72,7 +72,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -s|--speak)
-            [[ -z "$2" || "$2" == -* ]] && { echo "ftts: [!] --speak requires a quoted string" >&2; exit 1; }
+            [[ -z "$2" || "$2" == -* ]] && { echo "ftts:  --speak requires a quoted string" >&2; exit 1; }
             if [[ -n "$3" && "$3" != -* ]]; then
                 echo "ftts: Multi-word strings must be enclosed in double quotes" >&2
                 echo "Example: ftts -s \"hello world\"" >&2
@@ -87,7 +87,6 @@ while [[ $# -gt 0 ]]; do
             exit 0
             ;;
         *)
-            echo "ftts: Unknown option '$1'" >&2
             echo "Try 'ftts --help' for more information" >&2
             exit 1
             ;;
