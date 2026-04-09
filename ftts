@@ -18,14 +18,14 @@ for cmd in festival xsel; do
 done
 
 if [ "${#missing[@]}" -gt 0 ]; then
-    echo "ftts: The following dependencies are missing: ${missing[*]}" >&2
+    echo "The following dependencies are missing: ${missing[*]}" >&2
     read -rp "Would you like to install them via apt? [Y/n] " yn
     yn=${yn:-Y}
 
     if [[ $yn =~ ^[Yy]$ ]]; then
         sudo apt update && sudo apt install -y "${missing[@]}"
     else
-        echo "ftts: Cannot continue without required dependencies" >&2
+        echo "ERROR - Cannot continue without required dependencies" >&2
         exit 1
     fi
 fi
@@ -60,21 +60,21 @@ file_path=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -c|--clipboard)
-            [[ -n "$input_source" ]] && { echo "ftts: Multiple input sources specified" >&2; exit 1; }
+            [[ -n "$input_source" ]] && { echo "ERROR - Multiple input sources specified" >&2; exit 1; }
             input_source="clipboard"
             shift
             ;;
         -f|--file)
-            [[ -n "$input_source" ]] && { echo "ftts: Multiple input sources specified" >&2; exit 1; }
-            [[ -z "$2" || "$2" == -* ]] && { echo "ftts: --file requires a filename" >&2; exit 1; }
+            [[ -n "$input_source" ]] && { echo "ERROR - Multiple input sources specified" >&2; exit 1; }
+            [[ -z "$2" || "$2" == -* ]] && { echo "ERROR - --file requires a filename" >&2; exit 1; }
             input_source="file"
             file_path="$2"
             shift 2
             ;;
         -s|--speak)
-            [[ -z "$2" || "$2" == -* ]] && { echo "ftts:  --speak requires a quoted string" >&2; exit 1; }
+            [[ -z "$2" || "$2" == -* ]] && { echo "ERROR - --speak requires a quoted string" >&2; exit 1; }
             if [[ -n "$3" && "$3" != -* ]]; then
-                echo "ftts: Multi-word strings must be enclosed in double quotes" >&2
+                echo "ERROR - Multi-word strings must be enclosed in double quotes" >&2
                 echo "Example: ftts -s \"hello world\"" >&2
                 exit 1
             fi
@@ -95,17 +95,17 @@ done
 
 # --- VALIDATION ---
 if [[ -z "$input_source" ]]; then
-    echo "ftts: No input source specified" >&2
+    echo "No input source specified" >&2
     echo "Try 'ftts --help' for more information" >&2
     exit 1
 fi
 
 if [[ "$input_source" == "file" ]]; then
     if [[ ! -f "$file_path" || ! -r "$file_path" ]]; then
-        echo "ftts: '$file_path' is not a readable regular file" >&2
+        echo "ERROR - '$file_path' is not a readable regular file" >&2
         exit 1
     elif [[ $(file -b --mime-type "$file_path") != text/* ]]; then
-        echo "ftts: '$file_path' is not a plaintext file" >&2
+        echo "ERROR - '$file_path' is not a plaintext file" >&2
         exit 1
     fi
 fi
@@ -114,7 +114,7 @@ fi
 case "$input_source" in
     file)
         if [[ ! -f "$file_path" || ! -r "$file_path" ]]; then
-            echo "ftts: Cannot read file '$file_path'" >&2
+            echo "ERROR - Cannot read file '$file_path'" >&2
             exit 1
         fi
         text="$(cat "$file_path")"
@@ -125,7 +125,7 @@ case "$input_source" in
     string)
         ;;
     *)
-        echo "ftts: No valid input source specified" >&2
+        echo "ERROR - No valid input source specified" >&2
         usage
         exit 1
         ;;
