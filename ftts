@@ -9,6 +9,10 @@
 #
 # Project: https://github.com/galaxy-cli/ftts
 
+# --- PROGRAM CONFIGURATION ---
+PROGRAM_NAME="${0##*/}"
+VERSION="1.0.0"
+
 # --- DEPENDENCY ftts ---
 missing=()
 for cmd in festival xsel; do
@@ -18,14 +22,14 @@ for cmd in festival xsel; do
 done
 
 if [ "${#missing[@]}" -gt 0 ]; then
-    echo "The following dependencies are missing: ${missing[*]}" >&2
+    echo "${PROGRAM_NAME}: missing required dependencies: ${missing[*]}" >&2
     read -rp "Would you like to install them via apt? [Y/n] " yn
     yn=${yn:-Y}
 
     if [[ $yn =~ ^[Yy]$ ]]; then
         sudo apt update && sudo apt install -y "${missing[@]}"
     else
-        echo "ERROR - Cannot continue without required dependencies" >&2
+        echo "${PROGRAM_NAME}: cannot continue without required dependencies" >&2
         exit 1
     fi
 fi
@@ -33,22 +37,30 @@ fi
 # --- USAGE ---
 usage() {
     cat <<EOF
-DESCRIPTION
-  Converts text to speech using the Festival engine
+Usage: ${PROGRAM_NAME} [OPTION]... [FILE | TEXT]
 
-USAGE
-  ftts [OPTION] [FILE | "TEXT"]
+Convert text to speech using the Festival engine with fluid sentence pacing.
 
-OPTION
-  --help              Show this help message
-  -c, --clipboard     Use clipboard (xsel)
-  -f, --file          Use specified text file
-  -s, --speak         Speak the provided string (must be in quotes)
+Mandatory arguments to long options are mandatory for short options too.
+  -c, --clipboard        read text directly from the system clipboard
+  -f, --file=FILE        read text from specified plaintext FILE
+  -s, --speak=TEXT       speak the provided quoted string of TEXT
+      --help             display this help and exit
+  -v, --version          output version information and exit
 
-EXAMPLES
-  ftts --clipboard              Read clipboard in TTS         
-  ftts --file file.txt          Read file in TTS
-  ftts --speak "hello world"    Read input in TTS
+Examples:
+  ${PROGRAM_NAME} -c
+  ${PROGRAM_NAME} -f document.txt
+  ${PROGRAM_NAME} -s "Hello world"
+
+Report bugs to: <207926666+galaxy-cli@users.noreply.github.com>
+EOF
+}
+
+# --- VERSION ---
+show_version() {
+    cat <<EOF
+${PROGRAM_NAME} ${VERSION}
 EOF
 }
 
@@ -60,24 +72,20 @@ file_path=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -c|--clipboard)
-            [[ -n "$input_source" ]] && { echo "ERROR - Multiple input sources specified" >&2; exit 1; }
+            [[ -n "$input_source" ]] && { echo "${PROGRAM_NAME}: multiple input sources specified" >&2; exit 1; }
             input_source="clipboard"
             shift
             ;;
         -f|--file)
-            [[ -n "$input_source" ]] && { echo "ERROR - Multiple input sources specified" >&2; exit 1; }
-            [[ -z "$2" || "$2" == -* ]] && { echo "ERROR - --file requires a filename" >&2; exit 1; }
+            [[ -n "$input_source" ]] && { echo "${PROGRAM_NAME}: multiple input sources specified" >&2; exit 1; }
+            [[ -z "$2" || "$2" == -* ]] && { echo "${PROGRAM_NAME}: option requires an argument -- 'f'" >&2; exit 1; }
             input_source="file"
             file_path="$2"
             shift 2
             ;;
         -s|--speak)
-            [[ -z "$2" || "$2" == -* ]] && { echo "ERROR - --speak requires a quoted string" >&2; exit 1; }
-            if [[ -n "$3" && "$3" != -* ]]; then
-                echo "ERROR - Multi-word strings must be enclosed in double quotes" >&2
-                echo "Example: ftts -s \"hello world\"" >&2
-                exit 1
-            fi
+            [[ -n "$input_source" ]] && { echo "${PROGRAM_NAME}: multiple input sources specified" >&2; exit 1; }
+            [[ -z "$2" || "$2" == -* ]] && { echo "${PROGRAM_NAME}: option requires an argument -- 's'" >&2; exit 1; }
             input_source="string"
             text="$2"
             shift 2
@@ -86,8 +94,24 @@ while [[ $# -gt 0 ]]; do
             usage
             exit 0
             ;;
+        -v|--version)
+            show_version
+            exit 0
+            ;;
+        -*)
+            echo "${PROGRAM_NAME}: unrecognized option '$1'" >&2
+            echo "Try '${PROGRAM_NAME} --help' for more information" >&2
+            exit 1
+            ;;
         *)
-            echo "Try 'ftts --help' for more information" >&2
+            # If an argument is provided without a flag, check if it's an unquoted trailing string
+            if [[ -n "$text" ]]; then
+                echo "${PROGRAM_NAME}: multi-word strings must be enclosed in double quotes" >&2
+                echo "Try '${PROGRAM_NAME} -s \"hello world\"'" >&2
+                exit 1
+            fi
+            echo "${PROGRAM_NAME}: extra operand '$1'" >&2
+            echo "Try '${PROGRAM_NAME} --help' for more information" >&2
             exit 1
             ;;
     esac
@@ -95,28 +119,30 @@ done
 
 # --- VALIDATION ---
 if [[ -z "$input_source" ]]; then
-    echo "No input source specified" >&2
-    echo "Try 'ftts --help' for more information" >&2
+    echo "${PROGRAM_NAME}: no input source specified" >&2
+    echo "Try '${PROGRAM_NAME} --help' for more information" >&2
     exit 1
 fi
 
 if [[ "$input_source" == "file" ]]; then
-    if [[ ! -f "$file_path" || ! -r "$file_path" ]]; then
-        echo "ERROR - '$file_path' is not a readable regular file" >&2
+    if [[ ! -e "$file_path" ]]; then
+        echo "${PROGRAM_NAME}: ${file_path}: No such file or directory" >&2
+        exit 1
+    elif [[ ! -f "$file_path" ]]; then
+        echo "${PROGRAM_NAME}: ${file_path}: Not a regular file" >&2
+        exit 1
+    elif [[ ! -r "$file_path" ]]; then
+        echo "${PROGRAM_NAME}: ${file_path}: Permission denied" >&2
         exit 1
     elif [[ $(file -b --mime-type "$file_path") != text/* ]]; then
-        echo "ERROR - '$file_path' is not a plaintext file" >&2
+        echo "${PROGRAM_NAME}: ${file_path}: Not a plaintext file" >&2
         exit 1
     fi
 fi
 
-# --- OPTIONS ---
+# --- OPTIONS & TEXT PROCESSING ---
 case "$input_source" in
     file)
-        if [[ ! -f "$file_path" || ! -r "$file_path" ]]; then
-            echo "ERROR - Cannot read file '$file_path'" >&2
-            exit 1
-        fi
         text="$(cat "$file_path")"
         ;;
     clipboard)
@@ -125,15 +151,35 @@ case "$input_source" in
     string)
         ;;
     *)
-        echo "ERROR - No valid input source specified" >&2
-        usage
+        echo "${PROGRAM_NAME}: invalid internal input configuration" >&2
         exit 1
         ;;
 esac
 
-# --- EXECUTION ---
-escaped_text=$(printf '%s' "$text" | sed 's/"/\\"/g')
-(
-  echo "(Parameter.set 'Duration_Stretch 0.7)"
-  echo "(SayText \"$escaped_text\")"
-) | festival --pipe
+# --- CLEAN EXIT TRAP ---
+trap 'kill $FESTIVAL_PID 2>/dev/null; echo -e "\n[Speech Interrupted]"; exit 0' SIGINT
+
+# --- PERSISTENT STREAMED EXECUTION ---
+exec 3> >(festival --pipe 2>/dev/null)
+FESTIVAL_PID=$!
+
+echo "(Parameter.set 'Duration_Stretch 0.7)" >&3
+
+printf '%s\n' "$text" | \
+awk '
+  BEGIN { RS="[ \t\n]+" } 
+  { 
+    printf "%s ", $0
+    if ($0 ~ /[.?!]["\x27\x22]*$/) { printf "\n" }
+  }
+  END { printf "\n" }
+' | \
+while read -r sentence; do
+    [[ -z "${sentence//[:space:]/}" ]] && continue
+
+    escaped_sentence=$(printf '%s' "$sentence" | sed 's/"/\\"/g')
+    echo "(SayText \"$escaped_sentence\")" >&3
+done
+
+exec 3>&-
+wait $FESTIVAL_PID 2>/dev/null
