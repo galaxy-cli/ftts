@@ -26,10 +26,13 @@ mv ftts ~/.local/bin/          # Or anywhere else in your $PATH
 
 ```bash
 ftts -s "Hello world"                  # Speak a string directly
-ftts -f notes.txt                      # Speak content of a file
+ftts -f notes.txt                      # Speak content of a plaintext file
 ftts -c                                # Speak current clipboard content
 ftts -f book.txt -o audiobook.mp3      # Listen in real-time and save to MP3
 ```
+
+> [!TIP]
+> **Reading PDFs & Protected Documents:** To read documents like PDFs or web articles, simply open them in your preferred viewer, press `Ctrl+A` to select the text, `Ctrl+C` to copy it, and run `ftts -c`. This offloads the text extraction to your system for maximum reliability.
 
 ### Options
 
@@ -37,8 +40,8 @@ ftts -f book.txt -o audiobook.mp3      # Listen in real-time and save to MP3
 | Option | Argument | Description |
 | :--- | :---: | :--- |
 | `-c, --clipboard` | None | Speak text from the clipboard |
-| `-f, --file` | `FILE` | Speak content from a plaintext file |
-| `-s, --speak` | `TEXT` | Speak a quoted string directly |
+| `-f, --file` | `FILE` | Speak content from a specified plaintext FILE |
+| `-s, --say` | `TEXT` | Speak the provided quoted string of TEXT |
 | `-o, --output` | `OUT_FILE`| Simultaneously stream audio and save as an MP3 |
 | `--help` | None | Show help message and exit |
 | `-v, --version` | None | Output version information and exit |

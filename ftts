@@ -11,7 +11,7 @@
 
 # --- PROGRAM CONFIGURATION ---
 PROGRAM_NAME="${0##*/}"
-VERSION="1.3.3"
+VERSION="2.3.0"
 
 # --- DEPENDENCY CHECK ---
 missing=()
@@ -39,19 +39,19 @@ usage() {
     cat <<EOF
 Usage: ${PROGRAM_NAME} [OPTION]... [FILE | TEXT]
 
-Convert text to speech using the Festival engine with fluid sentence pacing.
+Convert text files, strings, and clipboards to speech fluidly.
 
 Mandatory arguments to long options are mandatory for short options too.
   -c, --clipboard        read text directly from the system clipboard
   -f, --file=FILE        read text from specified plaintext FILE
-  -s, --speak=TEXT       speak the provided quoted string of TEXT
+  -s, --say=TEXT         speak the provided quoted string of TEXT
   -o, --output=OUT_FILE  save the generated speech as an MP3 audio file
       --help             display this help and exit
   -v, --version          output version information and exit
 
 Examples:
   ${PROGRAM_NAME} -c
-  ${PROGRAM_NAME} -f document.txt -o notebook.mp3
+  ${PROGRAM_NAME} -f notes.txt -o audiobook.mp3
   ${PROGRAM_NAME} -s "Hello world"
 
 Report bugs to: <207926666+galaxy-cli@://github.com>
@@ -86,7 +86,7 @@ while [[ $# -gt 0 ]]; do
             file_path="$2"
             shift 2
             ;;
-        -s|--speak)
+        -s|--say)
             [[ -n "$input_source" ]] && { echo "${PROGRAM_NAME}: multiple input sources specified" >&2; exit 1; }
             [[ -z "$2" || "$2" == -* ]] && { echo "${PROGRAM_NAME}: option requires an argument -- 's'" >&2; exit 1; }
             input_source="string"
@@ -141,8 +141,14 @@ if [[ "$input_source" == "file" ]]; then
     elif [[ ! -r "$file_path" ]]; then
         echo "${PROGRAM_NAME}: ${file_path}: Permission denied" >&2
         exit 1
+    fi
+    
+    if [[ "$file_path" == *.pdf ]]; then
+        echo "${PROGRAM_NAME}: ${file_path}: PDF files are not supported natively" >&2
+        echo "Please open the file, copy the desired text, and use '${PROGRAM_NAME} -c' instead" >&2
+        exit 1
     elif [[ $(file -b --mime-type "$file_path") != text/* ]]; then
-        echo "${PROGRAM_NAME}: ${file_path}: Not a plaintext file" >&2
+        echo "${PROGRAM_NAME}: ${file_path}: Not a plaintext document file" >&2
         exit 1
     fi
 fi
