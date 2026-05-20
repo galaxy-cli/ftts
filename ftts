@@ -3,15 +3,15 @@
 #    / _| |_| |_ ___ 
 #   | |_| __| __/ __|
 #   |  _| |_| |_\__ \
-#   |_|  \__|\__|___/                 
+#   |_|  \__|\__|___/
 #
 # ftts - A professional text-to-speech engine wrapper for Festival with optional MP3 saving.
 #
-# Project: https://github.com
+# Project: https://github.com/galaxy-cli/ftts
 
 # --- PROGRAM CONFIGURATION ---
 PROGRAM_NAME="${0##*/}"
-VERSION="2.3.0"
+VERSION="2.3.1"
 
 # --- DEPENDENCY CHECK ---
 missing=()
