@@ -11,7 +11,7 @@
 
 # --- PROGRAM CONFIGURATION ---
 PROGRAM_NAME="${0##*/}"
-VERSION="2.3.1"
+VERSION="2.4.1"
 
 # --- DEPENDENCY CHECK ---
 missing=()
@@ -209,17 +209,41 @@ trap 'cleanup; echo -e "\n[Speech Interrupted]"; exit 0' SIGINT SIGTERM
 trap 'cleanup' EXIT
 
 # --- STREAMED SENTENCE EXECUTION ---
+# Create a dedicated temp file to store the safe Scheme execution block
+scm_script=$(mktemp /tmp/ftts_exec.XXXXXX.scm)
+trap 'cleanup; rm -f "$scm_script" 2>/dev/null' EXIT
+
 while read -r sentence; do
     [[ -z "${sentence//[:space:]/}" ]] && continue
 
-    escaped_sentence=$(printf '%s' "$sentence" | sed 's/"/\\"/g')
+    # Double escape backslashes and escape quotes safely for Scheme syntax
+    escaped_sentence=$(printf '%s' "$sentence" | sed 's/\\/\\\\/g; s/"/\\"/g')
     
-    festival -b \
-        "(Parameter.set 'Duration_Stretch 0.7)" \
-        "(set! myutt (Utterance Text \"$escaped_sentence\"))" \
-        "(utt.synth myutt)" \
-        "(utt.save.wave myutt \"$wav_segment\")" &>/dev/null
+    # Generate an explicit Scheme file dynamically
+    cat <<EOF > "$scm_script"
+(Parameter.set 'Duration_Stretch 0.7)
+(set! myutt (Utterance Text "${escaped_sentence}"))
+(utt.synth myutt)
+(utt.save.wave myutt "${wav_segment}")
+EOF
 
+    # Execute Festival and catch stderr to a variable to evaluate errors
+    festival_errors=$(festival -b "$scm_script" 2>&1 >/dev/null)
+    festival_status=$?
+
+    # --- ERROR HANDLING ENGINE ---
+    if [ $festival_status -ne 0 ] || [ ! -s "$wav_segment" ]; then
+        echo -e "\n[!] Festival Error Detected (Exit Code: $festival_status)" >&2
+        if [[ -n "$festival_errors" ]]; then
+            echo "Details: $(echo "$festival_errors" | head -n 2)" >&2
+        fi
+        echo "Problematic Text: \"$sentence\"" >&2
+        echo "Skipping sentence segment to prevent script crash..." >&2
+        rm -f "$wav_segment" 2>/dev/null
+        continue
+    fi
+
+    # --- AUDIO PLAYBACK & SAVE ---
     if [[ -f "$wav_segment" && -s "$wav_segment" ]]; then
         if [[ -n "$output_file" ]]; then
             aplay "$wav_segment" 2>/dev/null &
@@ -231,4 +255,4 @@ while read -r sentence; do
         fi
         rm -f "$wav_segment"
     fi
-done < <(printf '%s\n' "$text" | awk 'BEGIN { RS="[ \t\n]+" } { printf "%s ", $0; if ($0 ~ /[.?!]["\x27\x22]*$/) { printf "\n" } } END { printf "\n" }')
+done < <(printf '%s\n' "$text" | awk 'BEGIN { RS="[ \t\n]+" ; len=0 } { printf "%s ", $0; len+=length($0)+1; if ($0 ~ /[.?!]["\x27\x22]*$/ || len > 150) { printf "\n"; len=0 } } END { printf "\n" }')
