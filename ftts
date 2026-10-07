@@ -13,27 +13,6 @@
 PROGRAM_NAME="${0##*/}"
 VERSION="2.4.2"
 
-# --- DEPENDENCY CHECK ---
-missing=()
-for cmd in festival xsel aplay; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        missing+=("$cmd")
-    fi
-done
-
-if [ "${#missing[@]}" -gt 0 ]; then
-    echo "${PROGRAM_NAME}: missing required dependencies: ${missing[*]}" >&2
-    read -rp "Would you like to install them via apt? [Y/n] " yn
-    yn=${yn:-Y}
-
-    if [[ $yn =~ ^[Yy]$ ]]; then
-        sudo apt install -y "${missing[@]}"
-    else
-        echo "${PROGRAM_NAME}: cannot continue without required dependencies" >&2
-        exit 1
-    fi
-fi
-
 # --- USAGE ---
 usage() {
     cat <<EOF
@@ -54,7 +33,7 @@ Examples:
   ${PROGRAM_NAME} -f notes.txt -o audiobook.mp3
   ${PROGRAM_NAME} -s "Hello world"
 
-Report bugs to: <207926666+galaxy-cli@://github.com>
+Report bugs to: <https://github.com/galaxy-cli/ftts/issues>
 EOF
 }
 
@@ -63,6 +42,43 @@ show_version() {
     cat <<EOF
 ${PROGRAM_NAME} ${VERSION}
 EOF
+}
+
+# --- DEPENDENCY HELPERS ---
+# Maps a command to its installable apt package, for the rare cases where
+# they differ -- e.g. 'aplay' ships in the 'alsa-utils' package, not one
+# literally called 'aplay', so installing "aplay" directly via apt fails.
+pkg_for() {
+    case "$1" in
+        aplay) echo "alsa-utils" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# Checked contextually, right before each capability is actually needed
+# (after argument parsing, so --help/--version never trigger a dependency
+# prompt), rather than all five commands unconditionally at startup.
+check_deps() {
+    local missing_cmds=() missing_pkgs=()
+    for cmd in "$@"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_cmds+=("$cmd")
+            missing_pkgs+=("$(pkg_for "$cmd")")
+        fi
+    done
+
+    if [ "${#missing_cmds[@]}" -gt 0 ]; then
+        echo "${PROGRAM_NAME}: missing required dependencies: ${missing_cmds[*]}" >&2
+        read -rp "Would you like to install them via apt? [Y/n] " yn
+        yn=${yn:-Y}
+
+        if [[ $yn =~ ^[Yy]$ ]]; then
+            sudo apt install -y "${missing_pkgs[@]}"
+        else
+            echo "${PROGRAM_NAME}: cannot continue without required dependencies" >&2
+            exit 1
+        fi
+    fi
 }
 
 # --- INITIALIZE ---
@@ -131,7 +147,18 @@ if [[ -z "$input_source" ]]; then
     exit 1
 fi
 
+# --- CORE DEPENDENCIES ---
+# festival (synthesis) and aplay (playback) are needed for every mode, so
+# they're checked as soon as we know we're actually doing real work.
+check_deps festival aplay
+
+if [[ "$input_source" == "clipboard" ]]; then
+    check_deps xsel
+fi
+
 if [[ "$input_source" == "file" ]]; then
+    check_deps file
+
     if [[ ! -e "$file_path" ]]; then
         echo "${PROGRAM_NAME}: ${file_path}: No such file or directory" >&2
         exit 1
@@ -142,7 +169,7 @@ if [[ "$input_source" == "file" ]]; then
         echo "${PROGRAM_NAME}: ${file_path}: Permission denied" >&2
         exit 1
     fi
-    
+
     if [[ "$file_path" == *.pdf ]]; then
         echo "${PROGRAM_NAME}: ${file_path}: PDF files are not supported natively" >&2
         echo "Please open the file, copy the desired text, and use '${PROGRAM_NAME} -c' instead" >&2
@@ -155,12 +182,10 @@ fi
 
 # --- CONDITIONAL DEPENDENCY & PATH CHECK FOR MP3 ---
 if [[ -n "$output_file" ]]; then
-    if ! command -v lame >/dev/null 2>&1; then
-        echo "${PROGRAM_NAME}: saving to MP3 requires 'lame'. Please install it via apt." >&2
-        exit 1
-    fi
+    check_deps lame
+
     [[ "$output_file" != *.mp3 ]] && output_file="${output_file}.mp3"
-    
+
     output_dir=$(dirname "$output_file")
     if [[ ! -d "$output_dir" ]]; then
         echo "${PROGRAM_NAME}: ${output_dir}: No such directory" >&2
@@ -177,14 +202,14 @@ fi
 case "$input_source" in
     clipboard)
         text="$(xsel -b 2>/dev/null)"
-        if [[ -z "${text//[:space:]/}" ]]; then
+        if [[ -z "${text//[[:space:]]/}" ]]; then
             echo "${PROGRAM_NAME}: clipboard is empty" >&2
             exit 1
         fi
         ;;
     file)
         text="$(cat "$file_path")"
-        if [[ -z "${text//[:space:]/}" ]]; then
+        if [[ -z "${text//[[:space:]]/}" ]]; then
             echo "${PROGRAM_NAME}: ${file_path}: File is empty" >&2
             exit 1
         fi
@@ -199,26 +224,26 @@ esac
 
 # --- COMPONENT SETUP ---
 wav_segment=$(mktemp /tmp/ftts_seg.XXXXXX.wav)
+scm_script=$(mktemp /tmp/ftts_exec.XXXXXX.scm)
 
 # --- CLEAN EXIT TRAP ---
 cleanup() {
-    pkill -P $$ festival lame aplay 2>/dev/null
-    rm -f "$wav_segment" 2>/dev/null
+    # Single pattern with alternation -- pkill only accepts one pattern
+    # argument, so passing festival/lame/aplay as three separate arguments
+    # would be rejected and silently do nothing.
+    pkill -P $$ 'festival|lame|aplay' 2>/dev/null
+    rm -f "$wav_segment" "$scm_script" 2>/dev/null
 }
 trap 'cleanup; echo -e "\n[Speech Interrupted]"; exit 0' SIGINT SIGTERM
 trap 'cleanup' EXIT
 
 # --- STREAMED SENTENCE EXECUTION ---
-# Create a dedicated temp file to store the safe Scheme execution block
-scm_script=$(mktemp /tmp/ftts_exec.XXXXXX.scm)
-trap 'cleanup; rm -f "$scm_script" 2>/dev/null' EXIT
-
 while read -r sentence; do
-    [[ -z "${sentence//[:space:]/}" ]] && continue
+    [[ -z "${sentence//[[:space:]]/}" ]] && continue
 
     # Double escape backslashes and escape quotes safely for Scheme syntax
     escaped_sentence=$(printf '%s' "$sentence" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    
+
     # Generate an explicit Scheme file dynamically
     cat <<EOF > "$scm_script"
 (Parameter.set 'Duration_Stretch 0.7)
