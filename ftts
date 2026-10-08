@@ -6,13 +6,13 @@
 #   |_|  \__|\__|___/
 #
 # ftts - A professional text-to-speech engine wrapper for Festival, with
-#        optional MP3 saving and a choice of live playback engine.
+#        optional MP3 saving and an optional mpv playback mode.
 #
 # Project: https://github.com/galaxy-cli/ftts
 
 # --- PROGRAM CONFIGURATION ---
 PROGRAM_NAME="${0##*/}"
-VERSION="3.0.0"
+VERSION="3.1.0"
 
 # --- USAGE ---
 usage() {
@@ -25,7 +25,7 @@ Mandatory arguments to long options are mandatory for short options too.
   -c, --clipboard        read text directly from the system clipboard
   -f, --file=FILE        read text from specified plaintext FILE
   -s, --say=TEXT         speak the provided quoted string of TEXT
-  -p, --player=PLAYER    playback engine: 'aplay' (default) or 'mpv'
+  -m, --mpv              play through mpv instead of the default (aplay)
   -o, --output=DIR       also save an MP3 copy into DIR (auto-named)
       --help             display this help and exit
   -v, --version          output version information and exit
@@ -33,7 +33,8 @@ Mandatory arguments to long options are mandatory for short options too.
 Examples:
   ${PROGRAM_NAME} -c
   ${PROGRAM_NAME} -f notes.txt -o ~/Documents
-  ${PROGRAM_NAME} -s "Hello world" -p mpv
+  ${PROGRAM_NAME} -s "Hello world" -m
+  ${PROGRAM_NAME} -m document.mp3        Play an existing MP3 directly via mpv
 
 Report bugs to: <https://github.com/galaxy-cli/ftts/issues>
 EOF
@@ -132,8 +133,8 @@ output_dir=""
 output_file=""
 player="aplay"
 text=""
-mpv_fifo=""
-mpv_pid=""
+direct_play_file=""
+mpv_build_target=""
 
 # --- ARGUMENT PARSING ---
 while [[ $# -gt 0 ]]; do
@@ -157,13 +158,9 @@ while [[ $# -gt 0 ]]; do
             text="$2"
             shift 2
             ;;
-        -p|--player)
-            [[ -z "$2" || "$2" == -* ]] && { echo "${PROGRAM_NAME}: option requires an argument -- 'p'" >&2; exit 1; }
-            case "$2" in
-                aplay|mpv) player="$2" ;;
-                *) echo "${PROGRAM_NAME}: invalid player '$2' (expected 'aplay' or 'mpv')" >&2; exit 1 ;;
-            esac
-            shift 2
+        -m|--mpv)
+            player="mpv"
+            shift
             ;;
         -o|--output)
             [[ -z "$2" || "$2" == -* ]] && { echo "${PROGRAM_NAME}: option requires an argument -- 'o'" >&2; exit 1; }
@@ -184,6 +181,14 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
+            # A bare .mp3 target is "play this existing file directly" (see
+            # below), not text to synthesize -- recognized here so it
+            # doesn't fall into the -s-only "must be quoted" error path.
+            if [[ -z "$input_source" && -z "$direct_play_file" && "${1,,}" == *.mp3 ]]; then
+                direct_play_file="$1"
+                shift
+                continue
+            fi
             if [[ -n "$text" ]]; then
                 echo "${PROGRAM_NAME}: multi-word strings must be enclosed in double quotes" >&2
                 echo "Try '${PROGRAM_NAME} -s \"hello world\"'" >&2
@@ -195,6 +200,36 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# --- DIRECT MP3 PLAYBACK MODE ---
+# "ftts -m some.mp3" plays an already-existing MP3 directly via mpv --
+# entirely separate from the TTS pipeline below, so none of festival,
+# aplay, lame, xsel, or the sentence loop are involved at all.
+if [[ -n "$direct_play_file" ]]; then
+    if [[ "$player" != "mpv" ]]; then
+        echo "${PROGRAM_NAME}: playing an MP3 file directly requires -m/--mpv" >&2
+        exit 1
+    fi
+    if [[ -n "$input_source" ]]; then
+        echo "${PROGRAM_NAME}: cannot combine direct MP3 playback with a text input source" >&2
+        exit 1
+    fi
+    if [[ -n "$output_dir" ]]; then
+        echo "${PROGRAM_NAME}: cannot combine direct MP3 playback with --output" >&2
+        exit 1
+    fi
+    if [[ ! -e "$direct_play_file" ]]; then
+        echo "${PROGRAM_NAME}: ${direct_play_file}: No such file or directory" >&2
+        exit 1
+    elif [[ ! -f "$direct_play_file" || ! -r "$direct_play_file" ]]; then
+        echo "${PROGRAM_NAME}: ${direct_play_file}: Cannot read file" >&2
+        exit 1
+    fi
+
+    check_deps mpv
+    echo "${PROGRAM_NAME}: playing ${direct_play_file} via mpv..." >&2
+    exec mpv "$direct_play_file"
+fi
 
 # --- VALIDATION ---
 if [[ -z "$input_source" ]]; then
@@ -242,8 +277,8 @@ if [[ "$input_source" == "file" ]]; then
 fi
 
 # --- OUTPUT DIRECTORY VALIDATION ---
-# -o now takes a destination DIRECTORY, not an exact file path -- the
-# actual filename is derived later (once the text is known, for the
+# -o takes a destination DIRECTORY, not an exact file path -- the actual
+# filename is derived later (once the text is known, for the
 # clipboard/string slug) via compute_output_path().
 if [[ -n "$output_dir" ]]; then
     if [[ ! -d "$output_dir" ]]; then
@@ -265,6 +300,7 @@ fi
 # --- DATA EXTRACTION ---
 case "$input_source" in
     clipboard)
+        echo "${PROGRAM_NAME}: reading text from clipboard..." >&2
         text="$(xsel -b 2>/dev/null)"
         if [[ -z "${text//[[:space:]]/}" ]]; then
             echo "${PROGRAM_NAME}: clipboard is empty" >&2
@@ -272,6 +308,7 @@ case "$input_source" in
         fi
         ;;
     file)
+        echo "${PROGRAM_NAME}: reading text from ${file_path}..." >&2
         text="$(cat "$file_path")"
         if [[ -z "${text//[[:space:]]/}" ]]; then
             echo "${PROGRAM_NAME}: ${file_path}: File is empty" >&2
@@ -296,34 +333,37 @@ fi
 wav_segment=$(mktemp /tmp/ftts_seg.XXXXXX.wav)
 scm_script=$(mktemp /tmp/ftts_exec.XXXXXX.scm)
 
+# When player=mpv, the whole document is built into one complete MP3
+# first (same as a plain -o save), then handed to mpv to play once
+# finished -- rather than streaming sentence-by-sentence live. This is
+# the user's requested -o path if given (so the build IS the save), or a
+# throwaway temp file otherwise, cleaned up below once playback finishes.
+if [[ "$player" == "mpv" ]]; then
+    if [[ -n "$output_file" ]]; then
+        mpv_build_target="$output_file"
+    else
+        mpv_build_target=$(mktemp /tmp/ftts_build.XXXXXX.mp3)
+    fi
+fi
+
 # --- CLEAN EXIT TRAP ---
 cleanup() {
     # Single pattern with alternation -- pkill only accepts one pattern
     # argument, so passing these as three separate arguments would be
     # rejected and silently do nothing.
-    pkill -P $$ 'festival|lame|aplay' 2>/dev/null
-    [[ -n "$mpv_pid" ]] && kill "$mpv_pid" 2>/dev/null
+    pkill -P $$ 'festival|lame|aplay|mpv' 2>/dev/null
     rm -f "$wav_segment" "$scm_script" 2>/dev/null
-    [[ -n "$mpv_fifo" ]] && rm -f "$mpv_fifo" 2>/dev/null
+    # Only remove the build target if it's a throwaway temp file, never
+    # the user's actual -o save path.
+    if [[ -n "$mpv_build_target" && "$mpv_build_target" != "$output_file" ]]; then
+        rm -f "$mpv_build_target" 2>/dev/null
+    fi
 }
 trap 'cleanup; echo -e "\n[Speech Interrupted]"; exit 0' SIGINT SIGTERM
 trap 'cleanup' EXIT
 
-# --- MPV STREAMING SETUP ---
-# mpv is heavier to start than aplay, so (unlike aplay, which is launched
-# fresh per sentence below) it's started exactly ONCE here and fed a
-# continuous stream over a FIFO. File descriptor 3 is held open for
-# writing for the entire loop below, specifically so mpv never sees a
-# premature EOF between sentences: a FIFO reports EOF once ALL writers
-# close, and each sentence's own 'lame' process opening/closing the FIFO
-# individually would cause mpv to see (and act on) an EOF after every
-# single sentence otherwise.
 if [[ "$player" == "mpv" ]]; then
-    mpv_fifo=$(mktemp -u /tmp/ftts_stream.XXXXXX.fifo)
-    mkfifo "$mpv_fifo"
-    mpv --no-terminal --really-quiet "$mpv_fifo" &
-    mpv_pid=$!
-    exec 3> "$mpv_fifo"
+    echo "${PROGRAM_NAME}: converting text to speech..." >&2
 fi
 
 # --- STREAMED SENTENCE EXECUTION ---
@@ -335,7 +375,7 @@ while read -r sentence; do
 
     # Generate an explicit Scheme file dynamically
     cat <<EOF > "$scm_script"
-(Parameter.set 'Duration_Stretch 0.7)
+(Parameter.set 'Duration_Stretch 0.6)
 (set! myutt (Utterance Text "${escaped_sentence}"))
 (utt.synth myutt)
 (utt.save.wave myutt "${wav_segment}")
@@ -360,15 +400,13 @@ EOF
     # --- AUDIO PLAYBACK & SAVE ---
     if [[ -f "$wav_segment" && -s "$wav_segment" ]]; then
         if [[ "$player" == "mpv" ]]; then
-            if [[ -n "$output_file" ]]; then
-                lame --preset standard "$wav_segment" - 2>/dev/null | tee -a "$output_file" >&3
-            else
-                lame --preset standard "$wav_segment" - 2>/dev/null >&3
-            fi
+            # Build silently -- nothing plays until the full document is
+            # ready, then mpv plays the finished file once, after the loop.
+            lame --preset standard "$wav_segment" - >> "$mpv_build_target" 2>/dev/null
         else
-            # Unchanged from before: aplay per sentence, backgrounded
-            # alongside the lame encode when also saving so playback and
-            # encoding happen concurrently rather than one after another.
+            # Unchanged: aplay per sentence, backgrounded alongside the
+            # lame encode when also saving so playback and encoding happen
+            # concurrently rather than one after another.
             if [[ -n "$output_file" ]]; then
                 aplay "$wav_segment" 2>/dev/null &
                 APLAY_PID=$!
@@ -382,14 +420,13 @@ EOF
     fi
 done < <(printf '%s\n' "$text" | awk 'BEGIN { RS="[ \t\n]+" ; len=0 } { printf "%s ", $0; len+=length($0)+1; if ($0 ~ /[.?!]["\x27\x22]*$/ || len > 150) { printf "\n"; len=0 } } END { printf "\n" }')
 
-# Closing fd 3 is what lets mpv's reader finally see EOF and finish up
-# cleanly once every sentence has actually been written, then wait for it
-# so the script (and its EXIT trap) doesn't tear mpv down mid-playback.
-if [[ "$player" == "mpv" ]]; then
-    exec 3>&-
-    wait "$mpv_pid" 2>/dev/null
-fi
-
 if [[ -n "$output_file" ]]; then
     echo "${PROGRAM_NAME}: saved to ${output_file}" >&2
+fi
+
+# The full MP3 is only ready now that the loop above has finished -- play
+# it once, in full, rather than live during synthesis.
+if [[ "$player" == "mpv" ]]; then
+    echo "${PROGRAM_NAME}: playing via mpv..." >&2
+    mpv "$mpv_build_target"
 fi
