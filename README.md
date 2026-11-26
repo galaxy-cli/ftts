@@ -1,75 +1,84 @@
 # ftts
 
-A minimalist, high-performance CLI wrapper that pipes text to the Festival Text-to-Speech engine from files, strings, or your clipboard with fluid sentence pacing, an optional mpv playback mode, and optional MP3 saving. It can also play an existing MP3 directly.
+A minimalist CLI text-to-speech wrapper around Festival (`text2wave`) that reads from files, strings, the clipboard, or `stdin` with natural clause, sentence, and paragraph pacing, optional `mpv` playback, and single-pass MP3 saving. It can also play an existing MP3 directly.
 
 ### Prerequisites
 
-- **Festival**: The core TTS engine
-- **aplay**: Default playback engine (ships in the `alsa-utils` package)
-- **xsel**: Required for clipboard support (`-c` flag)
-- **lame**: Required for MP3 saving (`-o` flag) or playback via `-m`
-- **mpv**: Only required if you use `-m`
+- **festival** (provides `text2wave`): Core speech synthesis engine
+- **aplay** (`alsa-utils`): Default sentence-by-sentence playback engine
+- **xsel**: Required for clipboard input (`-c` / `--clipboard`)
+- **lame**: Required only when saving an MP3 (`-o` / `--output`)
+- **mpv**: Required when using `-m` / `--mpv`
 
-You don't need to install these up front -- `ftts` checks for whichever ones a given run actually needs and offers to install them via `apt` on the spot. To install everything ahead of time instead:
+You do not need to install everything up front—`ftts` checks the dependencies needed for the mode you run and offers to install missing packages via `apt` when prompted. To install all dependencies ahead of time:
+
 ```bash
 sudo apt update && sudo apt install festival alsa-utils xsel lame mpv
 ```
 
 ### Installation
 
-Give the script execution permissions and move it into your local binary directory:
+Give the script execution permissions and place it in a directory on your `PATH`:
 
 ```bash
 chmod +x ftts
-mv ftts ~/.local/bin/          # Or anywhere else in your $PATH
+mv ftts ~/.local/bin/
 ```
 
 ### Usage
 
 ```bash
-ftts -s "Hello world"                  # Speak a string directly
-ftts -f notes.txt                      # Speak content of a plaintext file
-ftts -c                                # Speak current clipboard content
-ftts -c -m                             # Convert, then play the result through mpv
-ftts -f book.txt -o ~/Documents        # Listen in real-time and save an MP3 copy
-ftts -m document.mp3                   # Play an existing MP3 directly via mpv
+ftts -s "Hello world"                  # Speak a quoted string
+ftts --say="Hello world"               # Long option with '=' syntax
+ftts -f notes.txt                      # Speak a plaintext file
+ftts -c                                # Speak current clipboard text
+echo "Hello from pipe" | ftts          # Read from stdin when piped
+ftts -c -m                             # Synthesize, then play via mpv
+ftts -f book.txt -o ~/Documents        # Play live and save a single MP3
+ftts -m recording.mp3                  # Play an existing MP3 via mpv
 ```
 
 > [!TIP]
-> **Reading PDFs & Protected Documents:** To read documents like PDFs or web articles, simply open them in your preferred viewer, press `Ctrl+A` to select the text, `Ctrl+C` to copy it, and run `ftts -c`. This offloads the text extraction to your system for maximum reliability.
+> **Reading PDFs or Rich Documents:** PDFs are not read natively by `-f`. You can extract text to `stdin` with a tool like `pdftotext` (`pdftotext doc.pdf - | ftts`) or copy text to the clipboard and run `ftts -c`.
 
-### Default playback vs. `-m`
+### Pacing & Pauses
 
-Without `-m`, speech plays through `aplay` sentence-by-sentence as it's synthesized -- audio starts almost immediately, and a bad sentence is skipped without losing the rest.
+Instead of breaking blindly at a fixed character count, `ftts` splits text along natural boundaries and inserts brief silence pauses into the audio stream:
 
-With `-m`, the entire input is converted into one complete MP3 first, with status messages along the way (`reading text from...`, `converting text to speech...`, `playing via mpv...`), and only then is it handed to `mpv` to play in full. This trades a quieter, lower-latency start for a cleaner, single finished file to play -- there's more of a wait before anything plays on a longer document, but you get clear feedback that it's working the whole time instead of silence.
+- **Clause breaks (`~90 ms`):** Light breath on commas, semicolons, colons, or dashes in longer chunks.
+- **Sentence/chunk breaks (`~180 ms`):** Clear pause at sentence endings while avoiding false splits on decimals like `3.14`.
+- **Paragraph & divider breaks (`~420 ms` in MP3/`mpv` mode, `+220 ms` extra beat in `aplay` mode):** Longer pause across blank lines or horizontal rules (`---`, `===`, `***`).
 
-### Saving audio
+### Default Playback vs. `-m` (`mpv`)
 
-`-o` takes a **destination directory**, not a specific filename -- `ftts` names the file for you and drops it in there:
-- **File input** reuses the source name: `ftts -f notes.txt -o ~/Documents` → `~/Documents/notes.mp3`
-- **Clipboard/string input** has no natural name to borrow, so it's named from a slug of the first few words plus a timestamp: `ftts -s "The quick brown fox" -o ~/Documents` → something like `~/Documents/the-quick-brown-fox_20260607-153012.mp3`
+- **Default (`aplay`):** Synthesizes and plays chunks one by one with low startup latency. If a chunk fails synthesis, `ftts` logs a warning and skips that chunk without aborting the run.
+- **With `-m` (`mpv`):** Synthesizes the full text first, prints status messages (`synthesizing speech...`, `playing via mpv...`), and plays the complete result through `mpv` without requiring `lame` unless `-o` is also set.
 
-If a file of that name already exists, a numeric suffix (`_2`, `_3`, ...) is added automatically rather than overwriting it. Combining `-o` with `-m` saves and plays the same finished file -- nothing extra is built twice.
+### Saving Audio (`-o`)
 
-`-o` can't be combined with `-m FILE.mp3` direct playback, since there's nothing to synthesize or save in that mode.
+`-o` takes a **destination directory** and names the output `.mp3` automatically using a single-pass `lame` encode after synthesis completes:
 
-### Playing an existing MP3
+- **File input:** Uses the source filename stem—for example, `ftts -f notes.txt -o ~/Documents` writes `~/Documents/notes.mp3`.
+- **Clipboard, string, or `stdin` input:** Builds a slug from the opening words plus a timestamp—for example, `~/Documents/the-quick-brown-fox_20260607-153012.mp3`.
 
-Pass `-m` together with a bare `.mp3` path (instead of `-c`/`-f`/`-s`) to skip text-to-speech entirely and just play that file through mpv:
+If a target filename already exists, `ftts` appends `_2`, `_3`, and so on rather than overwriting existing files. Combining `-o` and `-m` saves the MP3 and plays it through `mpv` from the same run.
+
+### Playing an Existing MP3
+
+Pass `-m` with a bare `.mp3` path (and no text input or `-o`) to bypass synthesis and play the file directly in `mpv`:
+
 ```bash
-ftts -m document.mp3
+ftts -m recording.mp3
 ```
-Without `-m`, a bare file argument like this isn't accepted -- it has to go through `-f` to be read as text, or be given to `-m` to be played as audio.
 
 ### Options
 
 | Option | Argument | Description |
 | :--- | :---: | :--- |
-| `-c, --clipboard` | None | Speak text from the clipboard |
-| `-f, --file` | `FILE` | Speak content from a specified plaintext FILE |
-| `-s, --say` | `TEXT` | Speak the provided quoted string of TEXT |
-| `-m, --mpv` | None | Convert fully, then play through mpv (or, with a bare `.mp3` path, play that file directly) |
-| `-o, --output` | `DIR` | Also save an MP3 copy into DIR (auto-named, see above) |
-| `--help` | None | Show help message and exit |
+| `-c, --clipboard` | None | Read text from the system clipboard |
+| `-f, --file=FILE` | `FILE` | Read text from a plaintext file |
+| `-s, --say=TEXT` | `TEXT` | Speak a quoted text string |
+| `-m, --mpv` | None | Play via `mpv` (or play a bare `.mp3` file directly) |
+| `-o, --output=DIR` | `DIR` | Save synthesized speech as an MP3 in `DIR` |
+| `-h, --help` | None | Display help message and exit |
 | `-v, --version` | None | Output version information and exit |
