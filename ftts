@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #     __ _   _
 #    / _| |_| |_ ___
 #   | |_| __| __/ __|
@@ -9,17 +10,16 @@
 #
 # Project: https://github.com/galaxy-cli/ftts
 
-#!/usr/bin/env bash
 set -uo pipefail
 
 PROGRAM_NAME="${0##*/}"
-VERSION="3.4.1"
+VERSION="4.0.0"
 
 usage() {
     cat <<EOF
-Usage: ${PROGRAM_NAME} [OPTION]... [FILE.mp3]
+Usage: ${PROGRAM_NAME} [OPTION]...
 
-Convert text from files, clipboard, arguments, or stdin into speech.
+Convert text from files, clipboard, arguments, or stdin into speech via aplay.
 
 Input:
   -c, --clipboard       read text from the system clipboard
@@ -27,20 +27,15 @@ Input:
   -s, --say=TEXT        speak a quoted text string
                         (reads from stdin if piped and no input flag is set)
 
-Playback & Output:
-  -m, --mpv             play via mpv instead of aplay
-  -o, --output=DIR      save an MP3 file in DIR
-
 Other:
   -h, --help            display this help and exit
   -v, --version         output version information and exit
 
 Examples:
   ${PROGRAM_NAME} -c
-  ${PROGRAM_NAME} -f notes.txt -o ~/Documents
-  ${PROGRAM_NAME} -s "Hello world" -m
+  ${PROGRAM_NAME} -f notes.txt
+  ${PROGRAM_NAME} -s "Hello world"
   echo "Hello from pipe" | ${PROGRAM_NAME}
-  ${PROGRAM_NAME} -m recording.mp3
 
 Report bugs to: <https://github.com/galaxy-cli/ftts/issues>
 EOF
@@ -77,33 +72,6 @@ check_deps() {
             exit 1
         fi
     fi
-}
-
-slugify_prefix() {
-    printf '%s' "$1" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -s '[:space:]' ' ' \
-        | cut -d' ' -f1-6 \
-        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' \
-        | cut -c1-50
-}
-
-compute_output_path() {
-    local base=""
-    if [[ "$input_source" == "file" ]]; then
-        base=$(basename "$file_path")
-        base="${base%.*}"
-    else
-        base="$(slugify_prefix "$text")"
-        base="${base:-ftts}_$(date +%Y%m%d-%H%M%S)"
-    fi
-
-    local candidate="${output_dir%/}/${base:-audio}.mp3" n=2
-    while [[ -e "$candidate" ]]; do
-        candidate="${output_dir%/}/${base:-audio}_${n}.mp3"
-        ((n++))
-    done
-    printf '%s' "$candidate"
 }
 
 # Emits:
@@ -188,10 +156,7 @@ pause_ms_for_tag() {
 # --- ARGUMENT PARSING ---
 input_source=""
 file_path=""
-output_dir=""
-player="aplay"
 text=""
-direct_play_file=""
 
 set_source() {
     [[ -n "$input_source" ]] && die "multiple input sources specified"
@@ -233,19 +198,6 @@ while [[ $# -gt 0 ]]; do
                 text="$2"; shift 2
             fi
             ;;
-        -m|--mpv)
-            $has_inline_val && die "option '$opt' doesn't allow an argument"
-            player="mpv"
-            shift
-            ;;
-        -o|--output)
-            if $has_inline_val; then
-                output_dir="$inline_val"; shift
-            else
-                (( $# < 2 )) || [[ "$2" == -* ]] && die "option requires an argument -- '$opt'"
-                output_dir="$2"; shift 2
-            fi
-            ;;
         -h|--help)
             usage; exit 0
             ;;
@@ -256,23 +208,11 @@ while [[ $# -gt 0 ]]; do
             die "unrecognized option '$1'"
             ;;
         *)
-            if [[ -z "$input_source" && -z "$direct_play_file" && "${1,,}" == *.mp3 ]]; then
-                direct_play_file="$1"; shift; continue
-            fi
             [[ -n "$text" ]] && die "multi-word strings must be enclosed in double quotes"
             die "extra operand '$1'"
             ;;
     esac
 done
-
-# --- DIRECT MP3 PLAYBACK ---
-if [[ -n "$direct_play_file" ]]; then
-    [[ "$player" != "mpv" ]] && die "playing an MP3 directly requires -m/--mpv"
-    [[ -n "$input_source" || -n "$output_dir" ]] && die "cannot combine direct MP3 playback with text input or --output"
-    [[ -f "$direct_play_file" && -r "$direct_play_file" ]] || die "${direct_play_file}: cannot read file"
-    check_deps mpv
-    exec mpv "$direct_play_file"
-fi
 
 # Default to stdin if piped and no flag given
 if [[ -z "$input_source" ]]; then
@@ -280,22 +220,16 @@ if [[ -z "$input_source" ]]; then
 fi
 
 # --- SINGLE-PASS VALIDATION & DEPENDENCIES ---
-deps=(text2wave "$player")
+deps=(text2wave aplay)
 [[ "$input_source" == "clipboard" ]] && deps+=(xsel)
-[[ -n "$output_dir" ]] && deps+=(lame)
 check_deps "${deps[@]}"
 
 if [[ "$input_source" == "file" ]]; then
     [[ -f "$file_path" && -r "$file_path" ]] || die "${file_path}: cannot read file"
     [[ "${file_path,,}" == *.pdf ]] && die "${file_path}: PDFs not supported natively (pipe via pdftotext instead)"
-    # Reject binary files quickly by checking for null bytes in the first 4 KB
     if head -c 4096 "$file_path" | grep -q $'\x00'; then
         die "${file_path}: binary file not supported"
     fi
-fi
-
-if [[ -n "$output_dir" ]]; then
-    [[ -d "$output_dir" && -w "$output_dir" ]] || die "${output_dir}: directory missing or not writable"
 fi
 
 # --- SINGLE-PASS DATA EXTRACTION ---
@@ -310,29 +244,21 @@ esac
 # --- TEMP FILES & CLEANUP ---
 wav_segment=$(mktemp /tmp/ftts_seg.XXXXXX.wav)
 silence_raw=$(mktemp /tmp/ftts_sil.XXXXXX.raw)
-raw_audio=""
-output_file=""
 sample_rate=16000
 
-[[ -n "$output_dir" ]] && output_file=$(compute_output_path)
-[[ -n "$output_file" || "$player" == "mpv" ]] && raw_audio=$(mktemp /tmp/ftts_raw.XXXXXX.pcm)
-
 cleanup() {
-    rm -f "$wav_segment" "$silence_raw" "$raw_audio" 2>/dev/null
+    rm -f "$wav_segment" "$silence_raw" 2>/dev/null
 }
 trap 'cleanup; echo -e "\n[Speech Interrupted]" >&2; exit 130' INT TERM
 trap 'cleanup' EXIT
 
 # --- SYNTHESIS LOOP ---
-[[ "$player" == "mpv" ]] && echo "${PROGRAM_NAME}: synthesizing speech..." >&2
-
 while IFS= read -r line; do
     [[ -z "$line" ]] && continue
 
     pause_ms=$(pause_ms_for_tag "$line")
     if (( pause_ms > 0 )); then
-        [[ -n "$raw_audio" ]] && append_pcm_silence "$raw_audio" "$pause_ms" "$sample_rate"
-        if [[ "$player" == "aplay" && "$line" == "<PARA>" ]]; then
+        if [[ "$line" == "<PARA>" ]]; then
             play_silence_aplay 220 "$sample_rate" "$silence_raw"
         fi
         continue
@@ -346,28 +272,5 @@ while IFS= read -r line; do
     detected_rate=$(od -An -tu4 -j24 -N4 "$wav_segment" 2>/dev/null | tr -d ' ')
     [[ -n "$detected_rate" ]] && sample_rate="$detected_rate"
 
-    [[ -n "$raw_audio" ]] && tail -c +45 "$wav_segment" >> "$raw_audio"
-
-    if [[ "$player" == "aplay" ]]; then
-        aplay -q "$wav_segment" 2>/dev/null
-    fi
+    aplay -q "$wav_segment" 2>/dev/null
 done < <(printf '%s\n' "$text" | chunk_text)
-
-# --- SINGLE-PASS MP3 SAVE & MPV PLAYBACK ---
-if [[ -n "$output_file" && -s "$raw_audio" ]]; then
-    lame --quiet -r -s "$sample_rate" -m m --bitwidth 16 --signed --preset standard "$raw_audio" "$output_file"
-    echo "${PROGRAM_NAME}: saved to ${output_file}" >&2
-fi
-
-if [[ "$player" == "mpv" && -s "$raw_audio" ]]; then
-    echo "${PROGRAM_NAME}: playing via mpv..." >&2
-    if [[ -n "$output_file" && -s "$output_file" ]]; then
-        mpv "$output_file"
-    else
-        mpv --demuxer=rawaudio \
-            --demuxer-rawaudio-rate="$sample_rate" \
-            --demuxer-rawaudio-channels=1 \
-            --demuxer-rawaudio-format=s16le \
-            "$raw_audio"
-    fi
-fi
