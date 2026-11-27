@@ -12,7 +12,7 @@
 set -uo pipefail
 
 PROGRAM_NAME="${0##*/}"
-VERSION="4.0.0"
+VERSION="4.1.0"
 
 ENGINE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/tts-engine"
 ENGINE_PY="${ENGINE_DIR}/tts_engine.py"
@@ -195,15 +195,25 @@ esac
 work_dir=$(mktemp -d /tmp/ftts.XXXXXX)
 silence_raw="${work_dir}/silence.raw"
 sample_rate=16000
+interrupted=0
 
 cleanup() {
     [[ -n "${work_dir:-}" && -d "${work_dir:-}" ]] && rm -rf "$work_dir"
 }
-trap 'cleanup; echo -e "\n[Speech Interrupted]" >&2; exit 130' INT TERM
+
+on_interrupt() {
+    interrupted=1
+    trap - INT TERM
+    kill -- -$$ 2>/dev/null || true
+    echo -e "\n[Speech Interrupted]" >&2
+    exit 130
+}
 trap 'cleanup' EXIT
+trap 'on_interrupt' INT TERM
 
 # --- STREAMING PLAYBACK VIA ENGINE ---
 while IFS=$'\t' read -r kind payload; do
+    (( interrupted )) && break
     [[ -z "$kind" ]] && continue
     case "$kind" in
         PAUSE)
@@ -220,3 +230,7 @@ done < <(
     printf '%s\n' "$text" \
         | python3 "$ENGINE_PY" --work-dir "$work_dir" --stretch 0.6 --include-pauses
 )
+
+if (( interrupted )); then
+    exit 130
+fi
