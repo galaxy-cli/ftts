@@ -5,8 +5,7 @@
 #   |  _| |_| |_\__ \
 #   |_|  \__|\__|___/
 #
-# ftts - A professional text-to-speech engine wrapper for Festival, with
-#        optional MP3 saving and an optional mpv playback mode.
+# ftts - Streaming Festival TTS wrapper using aplay
 #
 # Project: https://github.com/galaxy-cli/ftts
 
@@ -14,6 +13,10 @@ set -uo pipefail
 
 PROGRAM_NAME="${0##*/}"
 VERSION="4.0.0"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+ENGINE_PY="${REPO_ROOT}/engine/tts_engine.py"
 
 usage() {
     cat <<EOF
@@ -50,6 +53,7 @@ pkg_for() {
     case "$1" in
         aplay)     echo "alsa-utils" ;;
         text2wave) echo "festival" ;;
+        python3)   echo "python3" ;;
         *)         echo "$1" ;;
     esac
 }
@@ -74,63 +78,6 @@ check_deps() {
     fi
 }
 
-# Emits:
-#   <CLAUSE>  - brief breath after a clause break in a long chunk
-#   <SENT>    - standard pause after a sentence or chunk
-#   <PARA>    - longer pause at paragraph/blank-line boundaries
-chunk_text() {
-    awk '
-    BEGIN {
-        buf = ""
-        soft_max = 160
-        hard_max = 260
-    }
-    function emit_chunk(pause_tag) {
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", buf)
-        gsub(/[[:space:]]+/, " ", buf)
-        if (length(buf) > 0) {
-            print buf
-            if (pause_tag != "") {
-                print pause_tag
-            }
-        }
-        buf = ""
-    }
-    /^[[:space:]]*$/ {
-        emit_chunk("<PARA>")
-        next
-    }
-    {
-        n = split($0, words, /[[:space:]]+/)
-        for (i = 1; i <= n; i++) {
-            w = words[i]
-            if (w == "") continue
-
-            if (w ~ /^[-=*_]{3,}$/) {
-                emit_chunk("<PARA>")
-                continue
-            }
-
-            buf = (buf == "" ? w : buf " " w)
-
-            is_decimal = (w ~ /^[0-9]+\.[0-9]+$/)
-            ends_sentence = (!is_decimal && w ~ /[.!?]["\x27\x22\)\]]*$/)
-            ends_clause = (w ~ /[,;:—-]$/)
-
-            if (ends_sentence && length(buf) >= 20) {
-                emit_chunk("<SENT>")
-            } else if (ends_clause && length(buf) >= soft_max) {
-                emit_chunk("<CLAUSE>")
-            } else if (length(buf) >= hard_max) {
-                emit_chunk("<SENT>")
-            }
-        }
-    }
-    END {
-        emit_chunk("")
-    }'
-}
-
 append_pcm_silence() {
     local target_file="$1" ms="$2" rate="${3:-16000}"
     local bytes=$(( (rate * ms * 2) / 1000 ))
@@ -142,15 +89,6 @@ play_silence_aplay() {
     : > "$raw_sil"
     append_pcm_silence "$raw_sil" "$ms" "$rate"
     [[ -s "$raw_sil" ]] && aplay -q -t raw -f S16_LE -r "$rate" -c 1 "$raw_sil" 2>/dev/null
-}
-
-pause_ms_for_tag() {
-    case "$1" in
-        "<CLAUSE>") echo 90 ;;
-        "<SENT>")   echo 180 ;;
-        "<PARA>")   echo 420 ;;
-        *)          echo 0 ;;
-    esac
 }
 
 # --- ARGUMENT PARSING ---
@@ -214,13 +152,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default to stdin if piped and no flag given
 if [[ -z "$input_source" ]]; then
     [[ ! -t 0 ]] && input_source="stdin" || die "no input source specified (try --help)"
 fi
 
-# --- SINGLE-PASS VALIDATION & DEPENDENCIES ---
-deps=(text2wave aplay)
+# --- VALIDATION & DEPENDENCIES ---
+[[ -f "$ENGINE_PY" ]] || die "engine not found at ${ENGINE_PY}"
+
+deps=(python3 text2wave aplay)
 [[ "$input_source" == "clipboard" ]] && deps+=(xsel)
 check_deps "${deps[@]}"
 
@@ -232,7 +171,7 @@ if [[ "$input_source" == "file" ]]; then
     fi
 fi
 
-# --- SINGLE-PASS DATA EXTRACTION ---
+# --- DATA EXTRACTION ---
 case "$input_source" in
     clipboard) text="$(xsel -b 2>/dev/null)" ;;
     file)      text="$(<"$file_path")" ;;
@@ -241,36 +180,32 @@ case "$input_source" in
 esac
 [[ -z "${text//[[:space:]]/}" ]] && die "input text is empty"
 
-# --- TEMP FILES & CLEANUP ---
-wav_segment=$(mktemp /tmp/ftts_seg.XXXXXX.wav)
-silence_raw=$(mktemp /tmp/ftts_sil.XXXXXX.raw)
+# --- TEMP WORKSPACE & CLEANUP ---
+work_dir=$(mktemp -d /tmp/ftts.XXXXXX)
+silence_raw="${work_dir}/silence.raw"
 sample_rate=16000
 
 cleanup() {
-    rm -f "$wav_segment" "$silence_raw" 2>/dev/null
+    [[ -n "${work_dir:-}" && -d "${work_dir:-}" ]] && rm -rf "$work_dir"
 }
 trap 'cleanup; echo -e "\n[Speech Interrupted]" >&2; exit 130' INT TERM
 trap 'cleanup' EXIT
 
-# --- SYNTHESIS LOOP ---
-while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-
-    pause_ms=$(pause_ms_for_tag "$line")
-    if (( pause_ms > 0 )); then
-        if [[ "$line" == "<PARA>" ]]; then
-            play_silence_aplay 220 "$sample_rate" "$silence_raw"
-        fi
-        continue
-    fi
-
-    if ! err=$(printf '%s\n' "$line" | text2wave -eval "(Parameter.set 'Duration_Stretch 0.6)" -o "$wav_segment" 2>&1) || [[ ! -s "$wav_segment" ]]; then
-        echo "[!] Synthesis skipped: ${err%%$'\n'*}" >&2
-        continue
-    fi
-
-    detected_rate=$(od -An -tu4 -j24 -N4 "$wav_segment" 2>/dev/null | tr -d ' ')
-    [[ -n "$detected_rate" ]] && sample_rate="$detected_rate"
-
-    aplay -q "$wav_segment" 2>/dev/null
-done < <(printf '%s\n' "$text" | chunk_text)
+# --- STREAMING PLAYBACK VIA ENGINE ---
+while IFS=$'\t' read -r kind payload; do
+    [[ -z "$kind" ]] && continue
+    case "$kind" in
+        PAUSE)
+            [[ "$payload" =~ ^[0-9]+$ ]] && (( payload > 0 )) && play_silence_aplay "$payload" "$sample_rate" "$silence_raw"
+            ;;
+        WAV)
+            [[ -s "$payload" ]] || continue
+            detected_rate=$(od -An -tu4 -j24 -N4 "$payload" 2>/dev/null | tr -d ' ')
+            [[ -n "$detected_rate" ]] && sample_rate="$detected_rate"
+            aplay -q "$payload" 2>/dev/null
+            ;;
+    esac
+done < <(
+    printf '%s\n' "$text" \
+        | python3 "$ENGINE_PY" --work-dir "$work_dir" --stretch 0.6 --include-pauses
+)
