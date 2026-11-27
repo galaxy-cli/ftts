@@ -14,9 +14,20 @@ set -uo pipefail
 PROGRAM_NAME="${0##*/}"
 VERSION="4.0.0"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-ENGINE_PY="${REPO_ROOT}/engine/tts_engine.py"
+ENGINE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/tts-engine"
+ENGINE_PY="${ENGINE_DIR}/tts_engine.py"
+ENGINE_REPO="https://github.com/galaxy-cli/festival-tts-engine.git"
+
+ensure_engine() {
+    [[ -f "$ENGINE_PY" ]] && return 0
+
+    command -v git >/dev/null 2>&1 || die "engine missing at ${ENGINE_PY} and git is not installed"
+    echo "${PROGRAM_NAME}: engine not found; cloning into ${ENGINE_DIR}..." >&2
+    mkdir -p "$(dirname "$ENGINE_DIR")"
+    git clone --depth 1 "$ENGINE_REPO" "$ENGINE_DIR" >/dev/null 2>&1 \
+        || die "failed to clone engine from ${ENGINE_REPO}"
+    [[ -f "$ENGINE_PY" ]] || die "engine still not found at ${ENGINE_PY} after clone"
+}
 
 usage() {
     cat <<EOF
@@ -157,7 +168,7 @@ if [[ -z "$input_source" ]]; then
 fi
 
 # --- VALIDATION & DEPENDENCIES ---
-[[ -f "$ENGINE_PY" ]] || die "engine not found at ${ENGINE_PY}"
+ensure_engine
 
 deps=(python3 text2wave aplay)
 [[ "$input_source" == "clipboard" ]] && deps+=(xsel)
